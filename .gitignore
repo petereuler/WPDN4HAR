@@ -1,0 +1,61 @@
+# WPDN Project - Upload only source code
+# Ignore everything first, then allow specific items
+
+# Ignore common unwanted files first
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Ignore data and model files
+dataset/
+checkpoints/
+runs/
+ablation_results/
+time_frequency_outputs/
+performance_results/
+*.pth
+*.pt
+*.h5
+*.pkl
+*.npy
+*.npz
+*.hdf5
+*.png
+*.pdf
+*.csv
+*.json
+*.log
+*.tmp
+
+# Ignore everything else
+*
+
+# Allow specific directories and files
+!ablation_study/
+!dataset_process/
+!model/
+!utils/
+!experiment_all_datasets.py
+!test.py
+!testing_utils.py
+!train.py
+!training_utils.py
+!.gitignore
+!README.md
+!requirements.txt
+
+# But ignore specific subdirs within allowed directories
+ablation_study/ablation_results/
+ablation_study/runs/
+ablation_study/checkpoints/
+ablation_study/*.png
+ablation_study/*.pdf
+ablation_study/*.csv
+ablation_study/*.json
