@@ -199,7 +199,7 @@ class ModelFactory:
                     print(f"   - {param}")
                 print(f"请确保训练和测试时使用相同的模型配置")
                 return False
-            
+
             model.load_state_dict(checkpoint)
             print(f"✅ 模型权重加载成功: {checkpoint_path}")
             return True
@@ -221,7 +221,7 @@ class ModelFactory:
         print(f"🏗️ 轻量化小波包CNN模型架构:")
         print(f"   - 并行组数: {model_config.num_parallel_groups}")
         print(f"   - 分解层数: {model_config.decompose_levels}")
-        print(f"   - 分类器: 轻量化CNN")
+        print(f"   - 分类器: 局部频带稀疏1D分类头")
     
     # 标准模型打印信息方法
     @staticmethod

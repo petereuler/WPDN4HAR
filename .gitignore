@@ -50,6 +50,17 @@ performance_results/
 !.gitignore
 !README.md
 !requirements.txt
+!raspi_profile/
+!raspi_profile/README.md
+!raspi_profile/requirements.txt
+!raspi_profile/config.py
+!raspi_profile/model_factory.py
+!raspi_profile/profile_edge_inference.py
+!raspi_profile/model/
+!raspi_profile/model/__init__.py
+!raspi_profile/model/cnn_models.py
+!raspi_profile/model/model_wpdn.py
+!raspi_profile/model/wavelet_transform.py
 
 # But ignore specific subdirs within allowed directories
 ablation_study/ablation_results/
@@ -58,4 +69,8 @@ ablation_study/checkpoints/
 ablation_study/*.png
 ablation_study/*.pdf
 ablation_study/*.csv
+raspi_profile/__pycache__/
+raspi_profile/model/__pycache__/
+raspi_profile/checkpoints/
+raspi_profile/results/
 ablation_study/*.json

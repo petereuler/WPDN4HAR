@@ -41,7 +41,7 @@ def main():
 
     # 测试参数
     BATCH_SIZE = 50  # 测试批次大小
-    DEVICE = "cuda"  # "auto", "cuda", "cpu"
+    DEVICE = "cpu"  # "auto", "cuda", "cpu"
     NUM_INFERENCE_TESTS = 100  # 单样本推理测试次数
     TSNE_PERPLEXITY = 30  # t-SNE可视化的困惑度参数
     
@@ -152,6 +152,20 @@ def main():
         except Exception as e:
             print(f"⚠️ Failed to switch to deployment mode: {str(e)}")
             print("Will continue with training mode")
+
+    # CPU下启用进一步的推理快路径，确保wavelet_lite测试与对比脚本一致
+    if (
+        MODE == "wavelet_lite"
+        and device.type == "cpu"
+        and hasattr(model, "enable_cpu_fast_classifier")
+    ):
+        print(f"\n⚡ Enabling CPU fast inference path for wavelet_lite...")
+        try:
+            model.enable_cpu_fast_classifier()
+            print("✅ CPU fast inference path enabled")
+        except Exception as e:
+            print(f"⚠️ Failed to enable CPU fast inference path: {str(e)}")
+            print("Will continue with the regular inference path")
 
     # ==================== 模型测试 ====================
     print(f"\n🧪 Starting model testing...")

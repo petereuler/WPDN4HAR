@@ -60,12 +60,12 @@ class ModelTester:
         all_time_freq_maps = []
         single_sample_times = []
         
-        with torch.no_grad():
+        with torch.inference_mode():
             for xb, yb in tqdm(self.test_loader, desc="Testing"):
                 xb, yb = xb.to(self.device), yb.to(self.device)
                 
                 # 记录推理时间
-                start_time = time.time()
+                start_time = time.perf_counter()
                 
                 # 前向传播
                 if hasattr(self.model, 'forward_with_features'):
@@ -76,7 +76,7 @@ class ModelTester:
                     feats = logits  # 使用输出作为特征
                     all_time_freq_maps.extend([None] * xb.size(0))
                 
-                end_time = time.time()
+                end_time = time.perf_counter()
                 batch_time = (end_time - start_time) * 1000  # 转换为毫秒
                 single_sample_times.extend([batch_time / xb.size(0)] * xb.size(0))
                 
@@ -96,9 +96,10 @@ class ModelTester:
         
         return accuracy, all_preds, all_labels, all_feats, all_time_freq_maps, single_sample_times
     
-    def test_single_sample_inference(self, input_shape: Tuple[int, int], 
-                                   num_tests: int = 100, 
-                                   batch_avg_time: Optional[float] = None) -> Dict[str, Any]:
+    def test_single_sample_inference(self, input_shape: Tuple[int, int],
+                                   num_tests: int = 100,
+                                   batch_avg_time: Optional[float] = None,
+                                   inference_batch_size: int = 1) -> Dict[str, Any]:
         """
         测试单样本推理时间
         
@@ -113,22 +114,23 @@ class ModelTester:
         self.model.eval()
         
         # 创建随机输入
-        dummy_input = torch.randn(1, *input_shape).to(self.device)
+        batch_size = max(1, int(inference_batch_size))
+        dummy_input = torch.randn(batch_size, *input_shape).to(self.device)
         
         # 预热
-        with torch.no_grad():
+        with torch.inference_mode():
             for _ in range(10):
                 _ = self.model(dummy_input)
         
         # 测试推理时间
         inference_times = []
-        with torch.no_grad():
+        with torch.inference_mode():
             for _ in tqdm(range(num_tests), desc="Single Sample Inference Test"):
-                start_time = time.time()
+                start_time = time.perf_counter()
                 _ = self.model(dummy_input)
                 if self.device.type == 'cuda':
                     torch.cuda.synchronize()
-                end_time = time.time()
+                end_time = time.perf_counter()
                 inference_times.append((end_time - start_time) * 1000)  # 转换为毫秒
         
         inference_times = np.array(inference_times)
@@ -143,12 +145,24 @@ class ModelTester:
             'max': np.max(inference_times),
             'p95': np.percentile(inference_times, 95),
             'p99': np.percentile(inference_times, 99),
-            'cv': np.std(inference_times) / np.mean(inference_times)
+            'cv': np.std(inference_times) / np.mean(inference_times),
+            'batch_size': batch_size,
+            'mean_per_sample_ms': np.mean(inference_times) / batch_size,
+            'median_per_sample_ms': np.median(inference_times) / batch_size,
+            'p95_per_sample_ms': np.percentile(inference_times, 95) / batch_size,
+            'p99_per_sample_ms': np.percentile(inference_times, 99) / batch_size,
+            'peak_cpu_rss_mb': 0.0,
+            'peak_cpu_rss_delta_mb': 0.0,
+            'peak_gpu_allocated_mb': 0.0,
+            'peak_gpu_reserved_mb': 0.0,
+            'component_profile': None,
+            'component_profile_path': None
         }
         
         # 打印结果
-        print(f"\n⏱️ Single Sample Inference Time Analysis ({num_tests} tests):")
+        print(f"\n⏱️ Inference Time Analysis ({num_tests} tests, batch={batch_size}):")
         print(f"   Mean: {stats['mean']:.4f} ms")
+        print(f"   Mean per sample: {stats['mean_per_sample_ms']:.4f} ms")
         print(f"   Median: {stats['median']:.4f} ms")
         print(f"   Std: {stats['std']:.4f} ms")
         print(f"   Min: {stats['min']:.4f} ms")

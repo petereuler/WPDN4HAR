@@ -210,7 +210,7 @@ class Config:
         """获取架构描述"""
         arch_descriptions = {
             "wavelet_traditional": "传统小波包分解 + 标准CNN分类器",
-            "wavelet_lite": "可学习小波包分解 + 轻量化CNN分类器",
+            "wavelet_lite": "可学习小波包分解 + 局部频带稀疏1D分类头",
             
             # 标准模型
             "lstm": "标准长短期记忆网络",
@@ -233,7 +233,7 @@ class Config:
         """获取特征提取描述"""
         feature_descriptions = {
             "wavelet_traditional": "传统小波包变换",
-            "wavelet_lite": "可学习小波包变换 + 深度可分离卷积",
+            "wavelet_lite": "可学习小波包变换 + 局部频带稀疏1D卷积",
             
             # 标准模型
             "lstm": "标准LSTM循环单元",
