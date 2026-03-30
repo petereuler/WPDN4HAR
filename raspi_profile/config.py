@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 import torch
 
 
@@ -16,8 +17,27 @@ class ModelConfig:
     mode: str
     wavelet_type: str = "db4"
     wavelet_levels: int = 3
-    decompose_levels: int = 3
-    num_parallel_groups: int = 2
+    decompose_levels: int = 2
+    use_parallel_wavelet_kernels: bool = True
+    num_parallel_groups: int = 4
+    classifier_factor_rank: Optional[int] = 10
+    classifier_feature_groups: Optional[int] = None
+
+    @property
+    def wavelet_rank_max(self) -> Optional[int]:
+        return self.classifier_factor_rank
+
+    @wavelet_rank_max.setter
+    def wavelet_rank_max(self, value: Optional[int]) -> None:
+        self.classifier_factor_rank = value
+
+    @property
+    def wavelet_out_feature_groups(self) -> Optional[int]:
+        return self.classifier_feature_groups
+
+    @wavelet_out_feature_groups.setter
+    def wavelet_out_feature_groups(self, value: Optional[int]) -> None:
+        self.classifier_feature_groups = value
 
 
 class Config:
@@ -47,4 +67,3 @@ class Config:
     @staticmethod
     def get_results_dir() -> str:
         return "results"
-

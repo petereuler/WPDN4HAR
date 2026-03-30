@@ -3,6 +3,7 @@
 统一管理所有配置参数，包括数据集配置、模型配置、训练配置等
 """
 
+import copy
 import torch
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
@@ -38,17 +39,39 @@ class ModelConfig:
     # 小波相关配置
     wavelet_type: str = "db4"
     wavelet_levels: int = 3
-    decompose_levels: int = 3
+    decompose_levels: int = 2
+    use_parallel_wavelet_kernels: bool = True
     num_parallel_groups: int = 4
+    classifier_factor_rank: Optional[int] = 10
+    classifier_feature_groups: Optional[int] = None
     
     # 设备配置
     device: str = "auto"
+
+    @property
+    def wavelet_rank_max(self) -> Optional[int]:
+        """兼容旧命名，后续应使用 classifier_factor_rank。"""
+        return self.classifier_factor_rank
+
+    @wavelet_rank_max.setter
+    def wavelet_rank_max(self, value: Optional[int]) -> None:
+        self.classifier_factor_rank = value
+
+    @property
+    def wavelet_out_feature_groups(self) -> Optional[int]:
+        """兼容旧命名，后续应使用 classifier_feature_groups。"""
+        return self.classifier_feature_groups
+
+    @wavelet_out_feature_groups.setter
+    def wavelet_out_feature_groups(self, value: Optional[int]) -> None:
+        self.classifier_feature_groups = value
 
 
 @dataclass
 class TrainingConfig:
     """训练配置"""
     epochs: int = 100
+    batch_size: int = 32
     learning_rate: float = 0.001
     weight_decay: float = 1e-4
     patience: int = 10
@@ -73,6 +96,7 @@ class TestConfig:
     """测试配置"""
     batch_size: int = 32
     num_inference_tests: int = 100
+    inference_batch_size: int = 1
     tsne_perplexity: int = 30
 
 
@@ -167,7 +191,7 @@ class Config:
         """获取数据集配置"""
         if dataset_name not in cls.DATASET_CONFIGS:
             raise ValueError(f"Unsupported dataset: {dataset_name}")
-        return cls.DATASET_CONFIGS[dataset_name]
+        return copy.deepcopy(cls.DATASET_CONFIGS[dataset_name])
     
     @classmethod
     def get_model_checkpoint_path(cls, mode: str, dataset_name: str) -> str:
@@ -210,7 +234,7 @@ class Config:
         """获取架构描述"""
         arch_descriptions = {
             "wavelet_traditional": "传统小波包分解 + 标准CNN分类器",
-            "wavelet_lite": "可学习小波包分解 + 局部频带稀疏1D分类头",
+            "wavelet_lite": "可学习小波包分解 + 低秩时频Conv1d分类头",
             
             # 标准模型
             "lstm": "标准长短期记忆网络",
@@ -233,7 +257,7 @@ class Config:
         """获取特征提取描述"""
         feature_descriptions = {
             "wavelet_traditional": "传统小波包变换",
-            "wavelet_lite": "可学习小波包变换 + 局部频带稀疏1D卷积",
+            "wavelet_lite": "可学习小波包变换 + 因子化时频Conv1d",
             
             # 标准模型
             "lstm": "标准LSTM循环单元",
@@ -293,12 +317,24 @@ class Config:
             print(f"   - 分解层数: {model_config.wavelet_levels}")
         elif model_config.mode in ["wavelet_learnable", "wavelet_lite"]:
             print(f"   - 分解级数: {model_config.decompose_levels}")
-            print(f"   - 并行组数: {model_config.num_parallel_groups}")
+            if model_config.mode == "wavelet_lite":
+                print(f"   - 启用并行核: {model_config.use_parallel_wavelet_kernels}")
+                if model_config.use_parallel_wavelet_kernels:
+                    print(f"   - 并行组数: {model_config.num_parallel_groups}")
+                print(f"   - 分类器因子化秩: {model_config.classifier_factor_rank}")
+                feature_groups_desc = (
+                    f"{model_config.classifier_feature_groups}"
+                    if model_config.classifier_feature_groups is not None
+                    else "auto"
+                )
+                print(f"   - 分类器输出特征组: {feature_groups_desc}")
+                print("     └─ 每个频带在因子化分类头中的输出通道数")
         
         # 训练配置
         if training_config:
             print(f"🎯 训练配置:")
             print(f"   - 训练轮数: {training_config.epochs}")
+            print(f"   - 训练批次大小: {training_config.batch_size}")
             print(f"   - 学习率: {training_config.learning_rate}")
             print(f"   - 权重衰减: {training_config.weight_decay}")
             print(f"   - 早停耐心: {training_config.patience}")
@@ -308,7 +344,9 @@ class Config:
         # 测试配置
         if test_config:
             print(f"🔬 测试配置:")
+            print(f"   - 测试批次大小: {test_config.batch_size}")
             print(f"   - 推理测试次数: {test_config.num_inference_tests}")
+            print(f"   - 推理基准批次: {test_config.inference_batch_size}")
             print(f"   - t-SNE困惑度: {test_config.tsne_perplexity}")
         
         print(f"{'='*60}\n")

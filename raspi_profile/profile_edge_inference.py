@@ -23,8 +23,14 @@ def parse_args():
     parser.add_argument("--num-tests", type=int, default=100)
     parser.add_argument("--wavelet-type", type=str, default="db4")
     parser.add_argument("--wavelet-levels", type=int, default=3)
-    parser.add_argument("--decompose-levels", type=int, default=3)
-    parser.add_argument("--num-parallel-groups", type=int, default=2)
+    parser.add_argument("--decompose-levels", type=int, default=2)
+    parser.add_argument("--use-parallel-wavelet-kernels", action="store_true", default=True)
+    parser.add_argument(
+        "--no-use-parallel-wavelet-kernels",
+        dest="use_parallel_wavelet_kernels",
+        action="store_false",
+    )
+    parser.add_argument("--num-parallel-groups", type=int, default=4)
     parser.add_argument("--switch-to-deploy", action="store_true", default=True)
     parser.add_argument("--no-switch-to-deploy", dest="switch_to_deploy", action="store_false")
     parser.add_argument("--wavelet-cpu-fast-classifier", action="store_true", default=True)
@@ -34,11 +40,6 @@ def parse_args():
     parser.add_argument("--cpu-interop-threads", type=int, default=1)
     parser.add_argument("--checkpoint-path", type=str, default="")
     parser.add_argument("--no-checkpoint", action="store_true")
-    parser.add_argument("--streaming", action="store_true", default=False)
-    parser.add_argument("--sampling-rate", type=float, default=50.0)
-    parser.add_argument("--stream-points", type=int, default=1280)
-    parser.add_argument("--window-size", type=int, default=128)
-    parser.add_argument("--hop-size", type=int, default=64)
     return parser.parse_args()
 
 
@@ -114,47 +115,6 @@ def benchmark_inference(model, device, input_shape, num_tests, batch_size):
     }
 
 
-def benchmark_streaming(model, device, input_shape, args):
-    channels, window_size = input_shape
-    total_points = int(args.stream_points)
-    hop_size = int(args.hop_size)
-    sampling_rate = float(args.sampling_rate)
-    stream = torch.randn(total_points, channels, device=device)
-    buffer = torch.zeros(window_size, channels, device=device)
-    times = []
-    inference_count = 0
-
-    model.eval()
-    with torch.inference_mode():
-        for idx in range(total_points):
-            buffer = torch.roll(buffer, shifts=-1, dims=0)
-            buffer[-1] = stream[idx]
-            if idx + 1 < window_size:
-                continue
-            if (idx + 1 - window_size) % hop_size != 0:
-                continue
-            window = buffer.transpose(0, 1).unsqueeze(0)
-            start = time.perf_counter()
-            model(window)
-            if device.type == "cuda":
-                torch.cuda.synchronize()
-            end = time.perf_counter()
-            times.append((end - start) * 1000.0)
-            inference_count += 1
-
-    mean_ms = sum(times) / len(times) if times else 0.0
-    required_windows_per_s = sampling_rate / hop_size if hop_size > 0 else 0.0
-    achieved_windows_per_s = 1000.0 / mean_ms if mean_ms > 0 else 0.0
-    return {
-        "num_inferences": inference_count,
-        "mean_ms": mean_ms,
-        "mean_per_sample_ms": mean_ms,
-        "required_windows_per_s": required_windows_per_s,
-        "achieved_windows_per_s": achieved_windows_per_s,
-        "realtime_factor": achieved_windows_per_s / required_windows_per_s if required_windows_per_s > 0 else 0.0,
-    }
-
-
 def save_benchmark_results(args, dataset_config, ckpt_info, model_stats, rows):
     results_dir = Config.get_results_dir()
     os.makedirs(results_dir, exist_ok=True)
@@ -179,30 +139,6 @@ def save_benchmark_results(args, dataset_config, ckpt_info, model_stats, rows):
     return json_path, csv_path
 
 
-def save_stream_results(args, dataset_config, ckpt_info, model_stats, row):
-    results_dir = Config.get_results_dir()
-    os.makedirs(results_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base_name = f"edge_stream_{args.mode}_{dataset_config.name}_{timestamp}"
-    json_path = os.path.join(results_dir, f"{base_name}.json")
-    csv_path = os.path.join(results_dir, f"{base_name}.csv")
-    payload = {
-        "dataset": dataset_config.name,
-        "mode": args.mode,
-        "device": args.device,
-        "checkpoint": ckpt_info,
-        "model_stats": model_stats,
-        "streaming": row,
-    }
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
-        writer.writeheader()
-        writer.writerow(row)
-    return json_path, csv_path
-
-
 def main():
     args = parse_args()
     dataset_config = Config.get_dataset_config(args.dataset)
@@ -214,6 +150,7 @@ def main():
         wavelet_type=args.wavelet_type,
         wavelet_levels=args.wavelet_levels,
         decompose_levels=args.decompose_levels,
+        use_parallel_wavelet_kernels=args.use_parallel_wavelet_kernels,
         num_parallel_groups=args.num_parallel_groups,
     )
     model = ModelFactory.create_model(args.mode, dataset_config, model_config, device)
@@ -231,10 +168,9 @@ def main():
     if (
         args.switch_to_deploy
         and args.mode == "wavelet_lite"
-        and hasattr(model, "decomposer")
-        and hasattr(model.decomposer, "switch_to_deploy")
+        and hasattr(model, "switch_to_deploy")
     ):
-        model.decomposer.switch_to_deploy()
+        model.switch_to_deploy()
 
     if (
         args.wavelet_cpu_fast_classifier
@@ -252,14 +188,6 @@ def main():
         "loaded": checkpoint_loaded,
         "error": checkpoint_error,
     }
-
-    if args.streaming:
-        row = benchmark_streaming(model, device, input_shape, args)
-        json_path, csv_path = save_stream_results(args, dataset_config, ckpt_info, model_stats, row)
-        print(json.dumps(row, indent=2))
-        print(f"Saved JSON: {json_path}")
-        print(f"Saved CSV: {csv_path}")
-        return
 
     rows = []
     for batch_size in args.batch_sizes:

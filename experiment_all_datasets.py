@@ -1,6 +1,6 @@
 """
 多数据集重复实验脚本
-在所有数据集上运行10次实验，并绘制箱式图（已移除t-SNE可视化以提高效率）
+按 experiment_config.py 中定义的 sweep 配置运行多数据集实验，并绘制箱式图。
 """
 
 import torch
@@ -16,12 +16,15 @@ import pandas as pd
 plt.rcParams['font.sans-serif'] = ['DejaVu Sans']  # 使用英文字体
 plt.rcParams['axes.unicode_minus'] = False
 
-# 导入重构后的模块
-from utils.config import Config, TrainingConfig, TestConfig, DatasetConfig, ModelConfig
-from utils.model_factory import ModelFactory
-from utils.dataset_utils import DatasetLoader
+from experiment_config import MULTI_DATASET_MODE, MULTI_DATASET_REPEAT, MULTI_DATASET_SWEEP, ExperimentSelection
+from experiment_runtime import (
+    build_experiment_bundle,
+    create_test_setup,
+    create_training_setup,
+    get_checkpoint_path,
+    prepare_model_for_inference,
+)
 from training_utils import Trainer
-from testing_utils import ModelTester
 
 
 def run_single_experiment(dataset_name: str, experiment_id: int) -> Dict[str, Any]:
@@ -35,96 +38,31 @@ def run_single_experiment(dataset_name: str, experiment_id: int) -> Dict[str, An
     Returns:
         实验结果字典
     """
+    selection = ExperimentSelection(mode=MULTI_DATASET_MODE, dataset=dataset_name)
     print(f"\n{'='*70}")
-    print(f"运行实验 {experiment_id+1}/10 在数据集 {dataset_name} 上")
+    print(f"运行实验 {experiment_id+1}/{MULTI_DATASET_REPEAT} 在数据集 {dataset_name} 上")
     print(f"{'='*70}")
 
-    # ==================== 配置参数 ====================
-    MODE = 'wavelet_lite'  # WPDN模型
-    EPOCHS = 100  # 50个epoch
-    BATCH_SIZE = 32
-    LEARNING_RATE = 0.01
-    WEIGHT_DECAY = 1e-4
-    OPTIMIZER_TYPE = "Adam"
-    ORTH_WEIGHT = 0.001
-
-    # 小波参数
-    WAVELET_TYPE = "db4"
-    WAVELET_LEVELS = 3
-    DECOMPOSE_LEVELS = 2
-    NUM_PARALLEL_GROUPS = 4
-
-    # 数据集划分类型 - 使用每个数据集的默认分割方式
-    # 注意：不是所有数据集都支持所有分割方式
-
-    DEVICE = "auto"
-    TEST_BATCH_SIZE = 50
-    NUM_INFERENCE_TESTS = 100
-    TSNE_PERPLEXITY = 30
-
-    # MHEALTH特定参数
-    MHEALTH_STEP_SIZE = 64
-    MHEALTH_EXCLUDE_NULL = True
-
-    # ==================== 初始化配置 ====================
-    device = Config.setup_device(DEVICE)
-
-    # 数据集配置
-    dataset_config = Config.get_dataset_config(dataset_name)
-    if dataset_name == "MHEALTH":
-        dataset_config.step_size = MHEALTH_STEP_SIZE
-        dataset_config.exclude_null = MHEALTH_EXCLUDE_NULL
-
-    # 使用数据集配置中的默认划分类型（已在config.py中定义）
-
-    # 模型配置
-    model_config = ModelConfig(
-        mode=MODE,
-        wavelet_type=WAVELET_TYPE,
-        wavelet_levels=WAVELET_LEVELS,
-        decompose_levels=DECOMPOSE_LEVELS,
-        num_parallel_groups=NUM_PARALLEL_GROUPS
-    )
-
-    # 训练配置
-    training_config = TrainingConfig(
-        epochs=EPOCHS,
-        learning_rate=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY,
-        optimizer_type=OPTIMIZER_TYPE,
-        orth_weight=ORTH_WEIGHT
-    )
-
-    # 测试配置
-    test_config = TestConfig(
-        batch_size=TEST_BATCH_SIZE,
-        num_inference_tests=NUM_INFERENCE_TESTS,
-        tsne_perplexity=TSNE_PERPLEXITY
-    )
-
-    print(f"数据集: {dataset_name}, 设备: {device}")
+    train_bundle = build_experiment_bundle(selection, stage="train")
+    test_bundle = build_experiment_bundle(selection, stage="test")
+    print(f"数据集: {dataset_name}, 训练设备: {train_bundle.device}, 测试设备: {test_bundle.device}")
 
     # ==================== 数据加载 ====================
-    train_loader = DatasetLoader.create_train_loader(dataset_config)
-    val_loader = DatasetLoader.create_val_loader(dataset_config)
-    test_loader = DatasetLoader.create_test_loader(dataset_config)
-    class_names = DatasetLoader.get_class_names(dataset_config)
+    model, train_loader, val_loader = create_training_setup(train_bundle)
+    _, test_loader, _ = create_test_setup(test_bundle)
 
     # ==================== 训练阶段 ====================
     print(f"\n🏗️ 创建并训练模型...")
-
-    # 创建模型
-    model = ModelFactory.create_model(model_config.mode, dataset_config, model_config, device)
 
     # 创建训练器并训练
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
-        training_config=training_config,
-        dataset_config=dataset_config,
-        model_config=model_config,
-        device=device
+        training_config=train_bundle.training_config,
+        dataset_config=train_bundle.dataset_config,
+        model_config=train_bundle.model_config,
+        device=train_bundle.device
     )
 
     # 执行训练
@@ -133,19 +71,19 @@ def run_single_experiment(dataset_name: str, experiment_id: int) -> Dict[str, An
 
     # ==================== 测试阶段 ====================
     print(f"\n🧪 测试训练后的模型...")
+    model = model.to(test_bundle.device)
 
     # 加载最佳模型权重
-    model_checkpoint_path = Config.get_model_checkpoint_path(model_config.mode, dataset_config.name)
+    model_checkpoint_path = get_checkpoint_path(test_bundle)
     if os.path.exists(model_checkpoint_path):
-        ModelFactory.load_model_weights(model, model_checkpoint_path, device)
+        from utils.model_factory import ModelFactory
+
+        ModelFactory.load_model_weights(model, model_checkpoint_path, test_bundle.device)
         print(f"✅ 加载最佳模型权重: {model_checkpoint_path}")
     else:
         print(f"⚠️ 模型权重文件不存在: {model_checkpoint_path}")
 
-    # 重参数化切换到部署模式
-    if MODE in ["wavelet_lite", "wavelet_traditional"] and hasattr(model, 'decomposer') and hasattr(model.decomposer, 'switch_to_deploy'):
-        print(f"🔄 切换到部署模式...")
-        model.decomposer.switch_to_deploy()
+    model = prepare_model_for_inference(model, test_bundle)
 
     # 简化的测试，只计算准确性，跳过t-SNE等可视化
     model.eval()
@@ -154,7 +92,7 @@ def run_single_experiment(dataset_name: str, experiment_id: int) -> Dict[str, An
 
     with torch.no_grad():
         for xb, yb in test_loader:
-            xb, yb = xb.to(device), yb.to(device)
+            xb, yb = xb.to(test_bundle.device), yb.to(test_bundle.device)
             outputs = model(xb)
             _, predicted = torch.max(outputs.data, 1)
             test_total += yb.size(0)
@@ -167,6 +105,7 @@ def run_single_experiment(dataset_name: str, experiment_id: int) -> Dict[str, An
     return {
         'experiment_id': experiment_id,
         'dataset': dataset_name,
+        'mode': selection.mode,
         'val_accuracy': best_val_acc,
         'test_accuracy': test_acc,
         'training_history': training_results['history']
@@ -180,20 +119,20 @@ def run_all_experiments() -> Dict[str, List[Dict[str, Any]]]:
     Returns:
         所有实验结果
     """
-    datasets = ['UCIHAR', 'WISDM', 'PAMAP2', 'MHEALTH']
+    datasets = list(MULTI_DATASET_SWEEP)
     all_results = {dataset: [] for dataset in datasets}
 
     print(f"\n{'='*80}")
-    print(f"开始多数据集重复实验 - 共{len(datasets)}个数据集，每个数据集10次实验")
+    print(f"开始多数据集重复实验 - 共{len(datasets)}个数据集，每个数据集{MULTI_DATASET_REPEAT}次实验")
     print(f"{'='*80}")
 
-    total_experiments = len(datasets) * 10
+    total_experiments = len(datasets) * MULTI_DATASET_REPEAT
     current_experiment = 0
 
     for dataset in datasets:
         print(f"\n🎯 开始数据集 {dataset} 的实验")
 
-        for exp_id in range(1):
+        for exp_id in range(MULTI_DATASET_REPEAT):
             current_experiment += 1
             print(f"\n📊 总进度: {current_experiment}/{total_experiments}")
 
@@ -279,7 +218,12 @@ def create_boxplot(results: Dict[str, List[Dict[str, Any]]], save_path: str = "d
         # 设置标签和标题
         plt.xlabel('Dataset', fontsize=14, fontweight='bold')
         plt.ylabel('Test Accuracy (%)', fontsize=14, fontweight='bold')
-        plt.title('WPDN Model Performance Across Datasets\n(10 runs per dataset, 50 epochs each)', fontsize=16, pad=20, fontweight='bold')
+        plt.title(
+            f'WPDN Model Performance Across Datasets\n({MULTI_DATASET_REPEAT} runs per dataset)',
+            fontsize=16,
+            pad=20,
+            fontweight='bold',
+        )
 
         # 添加网格
         plt.grid(True, alpha=0.3, axis='y')
@@ -292,7 +236,7 @@ def create_boxplot(results: Dict[str, List[Dict[str, Any]]], save_path: str = "d
                 acc_values = [exp['test_accuracy'] * 100 for exp in valid_experiments]
                 mean_acc = np.mean(acc_values)
                 std_acc = np.std(acc_values)
-                stats_text.append('.1f')
+                stats_text.append(f"{dataset}: {mean_acc:.2f} ± {std_acc:.2f}")
 
         # 在图的右上角添加统计信息
         stats_box = '\n'.join(stats_text)
@@ -329,7 +273,7 @@ def print_summary(results: Dict[str, List[Dict[str, Any]]]):
             val_accs = [exp['val_accuracy'] for exp in valid_experiments if exp.get('val_accuracy') is not None]
 
             print(f"\n📊 {dataset}:")
-            print(f"   成功实验数: {len(valid_experiments)}/10")
+            print(f"   成功实验数: {len(valid_experiments)}/{MULTI_DATASET_REPEAT}")
             print(f"   测试精度 - 均值: {np.mean(test_accs):.2f}%, 标准差: {np.std(test_accs):.2f}%")
             print(f"   测试精度 - 范围: {np.min(test_accs):.2f}% - {np.max(test_accs):.2f}%")
 
@@ -337,7 +281,7 @@ def print_summary(results: Dict[str, List[Dict[str, Any]]]):
                 print(f"   验证精度 - 均值: {np.mean(val_accs):.2f}%, 标准差: {np.std(val_accs):.2f}%")
 
         if failed_experiments:
-            print(f"   失败实验数: {len(failed_experiments)}/10")
+            print(f"   失败实验数: {len(failed_experiments)}/{MULTI_DATASET_REPEAT}")
 
     print(f"{'='*80}")
 
@@ -345,8 +289,8 @@ def print_summary(results: Dict[str, List[Dict[str, Any]]]):
 def main():
     """主函数"""
     print("🚀 WPDN多数据集重复实验脚本")
-    print("📋 计划: 在UCIHAR、WISDM、PAMAP2、MHEALTH共4个数据集上各运行10次实验")
-    print("⚙️  配置: 1个epoch（测试用），wavelet_lite模式，已移除t-SNE可视化")
+    print(f"📋 计划: 模型 {MULTI_DATASET_MODE} 在 {', '.join(MULTI_DATASET_SWEEP)} 上各运行 {MULTI_DATASET_REPEAT} 次实验")
+    print("⚙️  配置: 统一从 experiment_config.py 读取")
 
     # 运行所有实验
     results = run_all_experiments()
@@ -365,4 +309,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

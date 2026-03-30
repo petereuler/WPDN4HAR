@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from .wavelet_transform import TraditionalWaveletTransform
+from .factorized_axis_conv1d import FactorizedClassifier1D
 
 def get_wavelet_initialization(kernel_size, decompose_levels):
     """
@@ -426,6 +427,13 @@ class ParallelDecomposer(nn.Module):
             total_loss += loss
         return total_loss / len(self.parallel_decomposers)
 
+    def switch_to_deploy(self):
+        """将所有并行分解器切换到部署态。"""
+        for decomposer in self.parallel_decomposers:
+            first_block = decomposer.decompose_blocks[0] if decomposer.decompose_blocks else None
+            if first_block is not None and not first_block.deploy:
+                decomposer.switch_to_deploy()
+
 class TimeFrequencyMapGenerator(nn.Module):
     def __init__(self, in_channels, input_length=128):
         super().__init__()
@@ -528,7 +536,8 @@ class LightweightWaveletPacketCNN(nn.Module):
     def __init__(self, in_channels=6, num_classes=6, input_length=128, kernel_size=4,
                  use_parallel=False, num_parallel_groups=4,
                  use_traditional_wavelet=False, wavelet_type='db4', wavelet_levels=3,
-                 decompose_levels=3, verbose=True):
+                 decompose_levels=3, classifier_rank_max=10,
+                 classifier_out_feature_groups=None, verbose=True):
         super().__init__()
         self.in_channels = in_channels
         self.num_classes = num_classes
@@ -541,6 +550,8 @@ class LightweightWaveletPacketCNN(nn.Module):
         self.wavelet_type = wavelet_type
         self.wavelet_levels = wavelet_levels
         self.decompose_levels = decompose_levels
+        self.classifier_rank_max = classifier_rank_max
+        self.classifier_out_feature_groups = classifier_out_feature_groups
         self._cpu_inference_model = None
         self.feature_groups = None
         self.sequence_num_bins = None
@@ -568,23 +579,31 @@ class LightweightWaveletPacketCNN(nn.Module):
             self.sequence_num_bins = num_frequency_bands
             sequence_shape = (in_channels * num_frequency_bands, input_length // (2 ** decompose_levels))
 
-        self.band_sparse_mixer = BandLocalSparseConv1d(self.sequence_num_bins, band_kernel_size=3)
-        self.classifier = self._create_ultra_lightweight_1d_classifier(sequence_shape[0], num_classes)
+        self.band_mixer = None
+        self.classifier = self._create_enhanced_1d_classifier(sequence_shape[0], num_classes)
 
-    def _create_ultra_lightweight_1d_classifier(self, in_channels, num_classes):
-        hidden_channels = min(16, max(8, in_channels // 6))
+    def switch_to_deploy(self):
+        if self.use_traditional_wavelet:
+            return self
+        if self.use_parallel and hasattr(self, "parallel_decomposer"):
+            self.parallel_decomposer.switch_to_deploy()
+            return self
+        if hasattr(self, "decomposer") and hasattr(self.decomposer, "switch_to_deploy"):
+            first_block = self.decomposer.decompose_blocks[0] if self.decomposer.decompose_blocks else None
+            if first_block is not None and not first_block.deploy:
+                self.decomposer.switch_to_deploy()
+        return self
 
-        return nn.Sequential(
-            nn.Conv1d(in_channels, in_channels, kernel_size=3, padding=1, groups=in_channels),
-            nn.BatchNorm1d(in_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv1d(in_channels, hidden_channels, kernel_size=1),
-            nn.BatchNorm1d(hidden_channels),
-            nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool1d(1),
-            nn.Flatten(),
-            nn.Dropout(0.3),
-            nn.Linear(hidden_channels, num_classes)
+    def _create_enhanced_1d_classifier(self, in_channels, num_classes):
+        return FactorizedClassifier1D(
+            feature_groups=self.feature_groups,
+            num_bands=self.sequence_num_bins,
+            num_classes=num_classes,
+            rank_max=self.classifier_rank_max,
+            out_feature_groups=self.classifier_out_feature_groups,
+            temporal_kernel_size=5,
+            frequency_kernel_size=3,
+            dropout=0.1,
         )
 
     def _forward_impl(self, x):
@@ -599,7 +618,9 @@ class LightweightWaveletPacketCNN(nn.Module):
             sequence_features = time_freq_map.permute(0, 2, 1, 3).reshape(batch_size, freq_bins * channels, time_bins)
         else:
             sequence_features = self.decomposer.forward_concat(x)
-        sequence_features = self.band_sparse_mixer(sequence_features, self.feature_groups)
+
+        if self.band_mixer is not None:
+            sequence_features = self.band_mixer(sequence_features, self.feature_groups)
 
         return self.classifier(sequence_features)
 
@@ -632,10 +653,7 @@ class LightweightWaveletPacketCNN(nn.Module):
         else:
             example_input = example_input.to(device="cpu")
 
-        if hasattr(self, "decomposer") and hasattr(self.decomposer, "switch_to_deploy"):
-            first_block = self.decomposer.decompose_blocks[0] if self.decomposer.decompose_blocks else None
-            if first_block is not None and not first_block.deploy:
-                self.decomposer.switch_to_deploy()
+        self.switch_to_deploy()
 
         self.eval()
         object.__setattr__(self, "_cpu_inference_model", None)

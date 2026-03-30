@@ -112,14 +112,17 @@ class ModelTester:
             推理时间统计信息
         """
         self.model.eval()
+        if self.device.type == "cpu":
+            torch.backends.mkldnn.enabled = True
         
         # 创建随机输入
         batch_size = max(1, int(inference_batch_size))
-        dummy_input = torch.randn(batch_size, *input_shape).to(self.device)
+        dummy_input = torch.randn(batch_size, *input_shape, device=self.device)
+        warmup = max(20, min(100, int(num_tests)))
         
         # 预热
         with torch.inference_mode():
-            for _ in range(10):
+            for _ in range(warmup):
                 _ = self.model(dummy_input)
         
         # 测试推理时间
@@ -528,7 +531,8 @@ class ModelTester:
         detailed_inference_times = self.test_single_sample_inference(
             input_shape, 
             num_tests=self.test_config.num_inference_tests, 
-            batch_avg_time=batch_avg_time
+            batch_avg_time=batch_avg_time,
+            inference_batch_size=self.test_config.inference_batch_size,
         )
         
         # 4. 绘制混淆矩阵
@@ -585,7 +589,11 @@ class ModelTester:
             results_dict["wavelet_levels"] = self.model_config.wavelet_levels
         elif self.model_config.mode in ["wavelet_learnable", "wavelet_lite"]:
             results_dict["decompose_levels"] = self.model_config.decompose_levels
-            results_dict["num_parallel_groups"] = self.model_config.num_parallel_groups
+            results_dict["use_parallel_wavelet_kernels"] = self.model_config.use_parallel_wavelet_kernels
+            if self.model_config.use_parallel_wavelet_kernels:
+                results_dict["num_parallel_groups"] = self.model_config.num_parallel_groups
+            results_dict["classifier_factor_rank"] = self.model_config.classifier_factor_rank
+            results_dict["classifier_feature_groups"] = self.model_config.classifier_feature_groups
             results_dict["feature_extraction"] = Config.get_feature_extraction_description(self.model_config.mode)
         
         # 保存结果

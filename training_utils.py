@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import os
 import time
-from typing import Tuple, Dict, Any
+from typing import Dict, Any
 
 from utils.config import Config, TrainingConfig, DatasetConfig, ModelConfig
 
@@ -97,15 +97,15 @@ class Trainer:
             if hasattr(self.training_config, 'orth_weight'):
                 writer.add_text("Training/Orth_Weight", str(self.training_config.orth_weight))
             if self.model_config.mode == "wavelet_lite":
-                writer.add_text("Model/Classifier_Type", "Lite (90%+ reduction)")
-                writer.add_text("Model/Convolution_Type", "Depthwise Separable")
+                writer.add_text("Model/Classifier_Type", "Low-rank time-frequency Conv1d")
+                writer.add_text("Model/Convolution_Type", "Factorized Conv1d")
         
         return writer
     
     def _count_parameters(self) -> int:
         """计算模型参数数量"""
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-    
+
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         """
         训练一个epoch
@@ -119,7 +119,7 @@ class Trainer:
         self.model.train()
         total_loss, total_correct, total_samples = 0, 0, 0
         total_orth_loss = 0.0
-        
+
         for xb, yb in tqdm(self.train_loader, desc=f"[Train] Epoch {epoch}"):
             xb, yb = xb.to(self.device), yb.to(self.device)
             self.optimizer.zero_grad()
@@ -156,11 +156,11 @@ class Trainer:
         self.writer.add_scalar("Train/Classification_Loss", avg_loss, epoch)
         self.writer.add_scalar("Train/Orthogonality_Loss", avg_orth_loss, epoch)
         self.writer.add_scalar("Train/Accuracy", train_acc, epoch)
-        
+
         return {
             "loss": avg_loss,
             "orth_loss": avg_orth_loss,
-            "accuracy": train_acc
+            "accuracy": train_acc,
         }
     
     def validate_epoch(self, epoch: int) -> Dict[str, float]:

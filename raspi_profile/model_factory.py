@@ -20,16 +20,23 @@ class ModelFactory:
                 num_classes=dataset_config.num_classes,
                 input_length=dataset_config.input_length,
                 kernel_size=dataset_config.kernel_size,
-                use_parallel=False,
+                use_parallel=model_config.use_parallel_wavelet_kernels,
                 num_parallel_groups=model_config.num_parallel_groups,
                 wavelet_type=model_config.wavelet_type,
                 wavelet_levels=model_config.wavelet_levels,
                 decompose_levels=model_config.decompose_levels,
+                classifier_rank_max=model_config.classifier_factor_rank,
+                classifier_out_feature_groups=model_config.classifier_feature_groups,
                 verbose=False,
             ).to(device)
             print("wavelet_lite")
             print(f"  decompose_levels={model_config.decompose_levels}")
-            print("  classifier=band-local sparse 1D head")
+            print(f"  use_parallel_wavelet_kernels={model_config.use_parallel_wavelet_kernels}")
+            if model_config.use_parallel_wavelet_kernels:
+                print(f"  num_parallel_groups={model_config.num_parallel_groups}")
+            print(f"  classifier_factor_rank={model_config.classifier_factor_rank}")
+            print(f"  classifier_feature_groups={model_config.classifier_feature_groups}")
+            print("  classifier=low-rank time-frequency Conv1d head")
             return model
 
         if mode == "cnn_lite":
@@ -53,4 +60,3 @@ class ModelFactory:
         model.load_state_dict(checkpoint)
         print(f"Loaded checkpoint: {checkpoint_path}")
         return True
-

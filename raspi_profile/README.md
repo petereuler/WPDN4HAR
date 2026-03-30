@@ -12,7 +12,6 @@
 - 吞吐：`throughput_samples_per_s`
 - 模型大小：`total_params / model_size_mb`
 - 进程峰值 RSS：`peak_cpu_rss_mb / peak_cpu_rss_delta_mb`
-- 流式场景实时性：`realtime_factor`
 
 不包含：
 
@@ -61,8 +60,10 @@ python profile_edge_inference.py --dataset UCIHAR --mode cnn_lite --device cpu -
 测试 `wavelet_lite` 并启用部署重参数化：
 
 ```bash
-python profile_edge_inference.py --dataset UCIHAR --mode wavelet_lite --device cpu --batch-sizes 1 8 --num-tests 100 --switch-to-deploy
+python profile_edge_inference.py --dataset UCIHAR --mode wavelet_lite --device cpu --batch-sizes 1 8 --num-tests 100 --switch-to-deploy --num-parallel-groups 4
 ```
+
+当前默认 `num_parallel_groups=4`，和主工程里这版 `wavelet_lite` 的训练配置保持一致。
 
 CPU 下会默认尝试启用 `wavelet_lite` 的 fast classifier。如果你想禁用它做对照：
 
@@ -76,46 +77,11 @@ python profile_edge_inference.py --dataset UCIHAR --mode wavelet_lite --device c
 python profile_edge_inference.py --dataset UCIHAR --mode cnn_lite --device cpu --cpu-tune --cpu-threads 4 --cpu-interop-threads 1
 ```
 
-## 流式模拟
-
-如果你要模拟在线输入场景，可以开启 `--streaming`。
-
-当前支持的流程是：
-
-- 先随机生成一段连续数据流
-- 按单点逐个读入
-- 缓存成长度为 `window_size` 的滑窗
-- 每来 `hop_size` 个新点触发一次推理
-
-例如：
-
-- 采样率 `50 Hz`
-- 总长度 `1280` 点
-- 窗长 `128`
-- 每来 `64` 个新点推理一次
-
-命令：
-
-```bash
-python profile_edge_inference.py --dataset UCIHAR --mode cnn_lite --device cpu --streaming --sampling-rate 50 --stream-points 1280 --window-size 128 --hop-size 64
-```
-
-这个模式会额外输出：
-
-- `num_inferences`
-- `required_windows_per_s`
-- `achieved_windows_per_s`
-- `realtime_factor`
-
-其中 `realtime_factor > 1` 表示模型推理速度快于这一路 50Hz 流式输入所要求的实时速度。
-
 ## 输出
 
 结果会写到 `results/`：
 
 - `edge_profile_*.json`
 - `edge_profile_*.csv`
-- `edge_stream_*.json`
-- `edge_stream_*.csv`
 
 CSV 每一行对应一个 batch size，适合直接比较不同模型在树莓派上的延迟和体积影响。

@@ -43,6 +43,8 @@ performance_results/
 !model/
 !utils/
 !experiment_all_datasets.py
+!experiment_config.py
+!experiment_runtime.py
 !test.py
 !testing_utils.py
 !train.py
